@@ -73,9 +73,13 @@ client.on('disconnected', (reason) => {
 client.initialize();
 
 // Routes
-
-// Health check
+// Serve frontend
 app.get('/', (req, res) => {
+    res.sendFile(__dirname + '/index.html');
+});
+
+// API health check
+app.get('/api/status', (req, res) => {
     res.json({ 
         status: 'running',
         whatsappConnected: whatsappReady,
@@ -83,6 +87,7 @@ app.get('/', (req, res) => {
         autoReplies: autoReplies.length
     });
 });
+
 
 // Get QR code for scanning
 app.get('/qr', (req, res) => {

@@ -28,11 +28,32 @@
             try {
                 const res = await fetch(`${API_URL}/status`);
                 const data = await res.json();
-                connectionStatus = data.whatsappConnected ? 'connected' : 'disconnected';
+                const newStatus = data.whatsappConnected ? 'connected' : 'disconnected';
+                
+                // Only re-render if status actually changed
+                if (newStatus !== connectionStatus) {
+                    connectionStatus = newStatus;
+                    updateStatusBadge();
+                }
             } catch {
-                connectionStatus = 'error';
+                if (connectionStatus !== 'error') {
+                    connectionStatus = 'error';
+                    updateStatusBadge();
+                }
             }
-            render();
+        }
+
+        function updateStatusBadge() {
+            const badge = document.getElementById('status-badge');
+            if (!badge) return;
+            
+            const statusBadge = connectionStatus === 'connected' 
+                ? '<svg class="w-5 h-5 text-green-200" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg><span class="text-sm">Connected</span>'
+                : connectionStatus === 'error'
+                ? '<svg class="w-5 h-5 text-red-200" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg><span class="text-sm">Error</span>'
+                : '<div class="w-3 h-3 bg-yellow-300 rounded-full animate-pulse"></div><span class="text-sm">Not Connected</span>';
+            
+            badge.innerHTML = statusBadge;
         }
 
         async function syncWithBackend() {
@@ -64,7 +85,7 @@
                 document.getElementById('msg-phone').value = '';
                 document.getElementById('msg-text').value = '';
                 document.getElementById('msg-datetime').value = '';
-                render();
+                renderScheduleTab();
             }
         }
 
@@ -72,7 +93,7 @@
             scheduledMessages = scheduledMessages.filter(msg => msg.id !== id);
             localStorage.setItem('scheduledMessages', JSON.stringify(scheduledMessages));
             syncWithBackend();
-            render();
+            renderScheduleTab();
         }
 
         function addAutoReply() {
@@ -85,7 +106,7 @@
                 syncWithBackend();
                 document.getElementById('reply-trigger').value = '';
                 document.getElementById('reply-response').value = '';
-                render();
+                renderAutoReplyTab();
             }
         }
 
@@ -93,54 +114,12 @@
             autoReplies = autoReplies.filter(reply => reply.id !== id);
             localStorage.setItem('autoReplies', JSON.stringify(autoReplies));
             syncWithBackend();
-            render();
-        }
-
-        function render() {
-            const statusBadge = connectionStatus === 'connected' 
-                ? '<svg class="w-5 h-5 text-green-200" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg><span class="text-sm">Connected</span>'
-                : connectionStatus === 'error'
-                ? '<svg class="w-5 h-5 text-red-200" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg><span class="text-sm">Error</span>'
-                : '<div class="w-3 h-3 bg-yellow-300 rounded-full animate-pulse"></div><span class="text-sm">Not Connected</span>';
-
-            document.getElementById('app').innerHTML = `
-                <div class="bg-white rounded-2xl shadow-xl overflow-hidden">
-                    <div class="bg-gradient-to-r from-green-600 to-teal-600 p-6 text-white">
-                        <div class="flex justify-between items-start">
-                            <div>
-                                <h1 class="text-3xl font-bold flex items-center gap-3">
-                                    <svg class="w-9 h-9" fill="currentColor" viewBox="0 0 20 20"><path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z"/><path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h2a2 2 0 002-2V9a2 2 0 00-2-2h-1z"/></svg>
-                                    WhatsApp Automation Hub
-                                </h1>
-                                <p class="text-green-100 mt-2">Schedule messages & auto-reply system</p>
-                            </div>
-                            <div class="flex items-center gap-2 bg-white/20 px-4 py-2 rounded-lg">
-                                ${statusBadge}
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="flex border-b bg-gray-50">
-                        <button onclick="window.setTab('schedule')" class="flex-1 py-4 px-6 font-semibold transition-all ${activeTab === 'schedule' ? 'bg-white text-green-600 border-b-2 border-green-600' : 'text-gray-600 hover:bg-gray-100'}">
-                            📅 Scheduled Messages
-                        </button>
-                        <button onclick="window.setTab('autoreply')" class="flex-1 py-4 px-6 font-semibold transition-all ${activeTab === 'autoreply' ? 'bg-white text-green-600 border-b-2 border-green-600' : 'text-gray-600 hover:bg-gray-100'}">
-                            💬 Auto Replies
-                        </button>
-                        <button onclick="window.setTab('setup')" class="flex-1 py-4 px-6 font-semibold transition-all ${activeTab === 'setup' ? 'bg-white text-green-600 border-b-2 border-green-600' : 'text-gray-600 hover:bg-gray-100'}">
-                            ⚙️ Setup
-                        </button>
-                    </div>
-
-                    <div class="p-6">
-                        ${activeTab === 'schedule' ? renderScheduleTab() : activeTab === 'autoreply' ? renderAutoReplyTab() : renderSetupTab()}
-                    </div>
-                </div>
-            `;
+            renderAutoReplyTab();
         }
 
         function renderScheduleTab() {
-            return `
+            const content = document.getElementById('tab-content');
+            content.innerHTML = `
                 <div class="space-y-6">
                     <div class="bg-gradient-to-br from-green-50 to-teal-50 p-6 rounded-xl border-2 border-green-200">
                         <h3 class="text-lg font-bold text-gray-800 mb-4">➕ Schedule New Message</h3>
@@ -174,7 +153,8 @@
         }
 
         function renderAutoReplyTab() {
-            return `
+            const content = document.getElementById('tab-content');
+            content.innerHTML = `
                 <div class="space-y-6">
                     <div class="bg-gradient-to-br from-blue-50 to-teal-50 p-6 rounded-xl border-2 border-blue-200">
                         <h3 class="text-lg font-bold text-gray-800 mb-4">➕ Add Auto Reply Rule</h3>
@@ -208,7 +188,8 @@
         }
 
         function renderSetupTab() {
-            return `
+            const content = document.getElementById('tab-content');
+            content.innerHTML = `
                 <div class="space-y-6">
                     <div class="bg-gradient-to-r from-green-50 to-blue-50 border-2 border-green-200 rounded-lg p-6">
                         <h3 class="text-xl font-bold text-gray-800 mb-4">✅ Setup Complete!</h3>
@@ -236,7 +217,7 @@
                             </li>
                             <li class="flex items-start gap-3">
                                 <span class="text-green-600 font-bold">3.</span>
-                                <span>Everything runs 24/7 on Railway's cloud servers</span>
+                                <span>Everything runs 24/7 on cloud servers</span>
                             </li>
                             <li class="flex items-start gap-3">
                                 <span class="text-green-600 font-bold">4.</span>
@@ -270,18 +251,74 @@
             `;
         }
 
-        window.setTab = (tab) => {
+        function setTab(tab) {
             activeTab = tab;
-            render();
-        };
+            
+            // Update tab buttons
+            document.querySelectorAll('[data-tab]').forEach(btn => {
+                btn.className = btn.getAttribute('data-tab') === tab
+                    ? 'flex-1 py-4 px-6 font-semibold transition-all bg-white text-green-600 border-b-2 border-green-600'
+                    : 'flex-1 py-4 px-6 font-semibold transition-all text-gray-600 hover:bg-gray-100';
+            });
+            
+            // Render appropriate tab content
+            if (tab === 'schedule') renderScheduleTab();
+            else if (tab === 'autoreply') renderAutoReplyTab();
+            else renderSetupTab();
+        }
 
+        function initialRender() {
+            const statusBadge = connectionStatus === 'connected' 
+                ? '<svg class="w-5 h-5 text-green-200" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg><span class="text-sm">Connected</span>'
+                : connectionStatus === 'error'
+                ? '<svg class="w-5 h-5 text-red-200" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg><span class="text-sm">Error</span>'
+                : '<div class="w-3 h-3 bg-yellow-300 rounded-full animate-pulse"></div><span class="text-sm">Not Connected</span>';
+
+            document.getElementById('app').innerHTML = `
+                <div class="bg-white rounded-2xl shadow-xl overflow-hidden">
+                    <div class="bg-gradient-to-r from-green-600 to-teal-600 p-6 text-white">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <h1 class="text-3xl font-bold flex items-center gap-3">
+                                    <svg class="w-9 h-9" fill="currentColor" viewBox="0 0 20 20"><path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z"/><path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h2a2 2 0 002-2V9a2 2 0 00-2-2h-1z"/></svg>
+                                    WhatsApp Automation Hub
+                                </h1>
+                                <p class="text-green-100 mt-2">Schedule messages & auto-reply system</p>
+                            </div>
+                            <div id="status-badge" class="flex items-center gap-2 bg-white/20 px-4 py-2 rounded-lg">
+                                ${statusBadge}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex border-b bg-gray-50">
+                        <button data-tab="schedule" onclick="window.setTab('schedule')" class="flex-1 py-4 px-6 font-semibold transition-all bg-white text-green-600 border-b-2 border-green-600">
+                            📅 Scheduled Messages
+                        </button>
+                        <button data-tab="autoreply" onclick="window.setTab('autoreply')" class="flex-1 py-4 px-6 font-semibold transition-all text-gray-600 hover:bg-gray-100">
+                            💬 Auto Replies
+                        </button>
+                        <button data-tab="setup" onclick="window.setTab('setup')" class="flex-1 py-4 px-6 font-semibold transition-all text-gray-600 hover:bg-gray-100">
+                            ⚙️ Setup
+                        </button>
+                    </div>
+
+                    <div id="tab-content" class="p-6"></div>
+                </div>
+            `;
+            
+            renderScheduleTab();
+        }
+
+        // Expose functions to window
+        window.setTab = setTab;
         window.addScheduledMessage = addScheduledMessage;
         window.deleteScheduledMessage = deleteScheduledMessage;
         window.addAutoReply = addAutoReply;
         window.deleteAutoReply = deleteAutoReply;
 
         // Initial render and status check
-        render();
+        initialRender();
         checkConnection();
         setInterval(checkConnection, 5000);
     </script>

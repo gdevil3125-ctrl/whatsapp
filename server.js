@@ -2,7 +2,7 @@ const express = require('express');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode = require('qrcode');
 const cors = require('cors');
-const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -10,6 +10,7 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(cors());
 app.use(express.json());
+app.use(express.static(__dirname)); // Serve static files (index.html)
 
 // Data storage
 let scheduledMessages = [];
@@ -73,21 +74,11 @@ client.on('disconnected', (reason) => {
 client.initialize();
 
 // Routes
-// Serve frontend
+
+// Serve HTML dashboard at root
 app.get('/', (req, res) => {
-    res.sendFile(__dirname + '/index.html');
+    res.sendFile(path.join(__dirname, 'index.html'));
 });
-
-// API health check
-app.get('/api/status', (req, res) => {
-    res.json({ 
-        status: 'running',
-        whatsappConnected: whatsappReady,
-        scheduledMessages: scheduledMessages.length,
-        autoReplies: autoReplies.length
-    });
-});
-
 
 // Get QR code for scanning
 app.get('/qr', (req, res) => {
@@ -113,6 +104,16 @@ app.get('/qr', (req, res) => {
 // Get status
 app.get('/status', (req, res) => {
     res.json({
+        whatsappConnected: whatsappReady,
+        scheduledMessages: scheduledMessages.length,
+        autoReplies: autoReplies.length
+    });
+});
+
+// API health check (for monitoring)
+app.get('/api/health', (req, res) => {
+    res.json({ 
+        status: 'running',
         whatsappConnected: whatsappReady,
         scheduledMessages: scheduledMessages.length,
         autoReplies: autoReplies.length
@@ -177,5 +178,6 @@ setInterval(async () => {
 // Start server
 app.listen(PORT, () => {
     console.log(`Server running on port ${PORT}`);
+    console.log(`Visit http://localhost:${PORT} to access dashboard`);
     console.log(`Visit http://localhost:${PORT}/qr to scan QR code`);
 });

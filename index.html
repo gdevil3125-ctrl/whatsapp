@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WhatsApp Automation Hub</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-green-50 to-teal-50 min-h-screen p-4">
+    <div id="app" class="max-w-5xl mx-auto"></div>
+
+    <script type="module">
+        const API_URL = window.location.origin;
+
+        let activeTab = 'schedule';
+        let scheduledMessages = JSON.parse(localStorage.getItem('scheduledMessages') || '[]');
+        let autoReplies = JSON.parse(localStorage.getItem('autoReplies') || '[]');
+        let connectionStatus = 'disconnected';
+
+        async function checkConnection() {
+            try {
+                const res = await fetch(`${API_URL}/status`);
+                const data = await res.json();
+                connectionStatus = data.whatsappConnected ? 'connected' : 'disconnected';
+            } catch {
+                connectionStatus = 'error';
+            }
+            render();
+        }
+
+        async function syncWithBackend() {
+            try {
+                await fetch(`${API_URL}/scheduled-messages`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(scheduledMessages)
+                });
+                await fetch(`${API_URL}/auto-replies`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(autoReplies)
+                });
+            } catch (err) {
+                console.error('Sync failed:', err);
+            }
+        }
+
+        function addScheduledMessage() {
+            const phone = document.getElementById('msg-phone').value;
+            const message = document.getElementById('msg-text').value;
+            const datetime = document.getElementById('msg-datetime').value;
+
+            if (phone && message && datetime) {
+                scheduledMessages.push({ phone, message, datetime, id: Date.now(), status: 'pending' });
+                localStorage.setItem('scheduledMessages', JSON.stringify(scheduledMessages));
+                syncWithBackend();
+                document.getElementById('msg-phone').value = '';
+                document.getElementById('msg-text').value = '';
+                document.getElementById('msg-datetime').value = '';
+                render();
+            }
+        }
+
+        function deleteScheduledMessage(id) {
+            scheduledMessages = scheduledMessages.filter(msg => msg.id !== id);
+            localStorage.setItem('scheduledMessages', JSON.stringify(scheduledMessages));
+            syncWithBackend();
+            render();
+        }
+
+        function addAutoReply() {
+            const trigger = document.getElementById('reply-trigger').value;
+            const response = document.getElementById('reply-response').value;
+
+            if (trigger && response) {
+                autoReplies.push({ trigger, response, id: Date.now() });
+                localStorage.setItem('autoReplies', JSON.stringify(autoReplies));
+                syncWithBackend();
+                document.getElementById('reply-trigger').value = '';
+                document.getElementById('reply-response').value = '';
+                render();
+            }
+        }
+
+        function deleteAutoReply(id) {
+            autoReplies = autoReplies.filter(reply => reply.id !== id);
+            localStorage.setItem('autoReplies', JSON.stringify(autoReplies));
+            syncWithBackend();
+            render();
+        }
+
+        function render() {
+            const statusBadge = connectionStatus === 'connected' 
+                ? '<svg class="w-5 h-5 text-green-200" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg><span class="text-sm">Connected</span>'
+                : connectionStatus === 'error'
+                ? '<svg class="w-5 h-5 text-red-200" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/></svg><span class="text-sm">Error</span>'
+                : '<div class="w-3 h-3 bg-yellow-300 rounded-full animate-pulse"></div><span class="text-sm">Not Connected</span>';
+
+            document.getElementById('app').innerHTML = `
+                <div class="bg-white rounded-2xl shadow-xl overflow-hidden">
+                    <div class="bg-gradient-to-r from-green-600 to-teal-600 p-6 text-white">
+                        <div class="flex justify-between items-start">
+                            <div>
+                                <h1 class="text-3xl font-bold flex items-center gap-3">
+                                    <svg class="w-9 h-9" fill="currentColor" viewBox="0 0 20 20"><path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z"/><path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h2a2 2 0 002-2V9a2 2 0 00-2-2h-1z"/></svg>
+                                    WhatsApp Automation Hub
+                                </h1>
+                                <p class="text-green-100 mt-2">Schedule messages & auto-reply system</p>
+                            </div>
+                            <div class="flex items-center gap-2 bg-white/20 px-4 py-2 rounded-lg">
+                                ${statusBadge}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex border-b bg-gray-50">
+                        <button onclick="window.setTab('schedule')" class="flex-1 py-4 px-6 font-semibold transition-all ${activeTab === 'schedule' ? 'bg-white text-green-600 border-b-2 border-green-600' : 'text-gray-600 hover:bg-gray-100'}">
+                            📅 Scheduled Messages
+                        </button>
+                        <button onclick="window.setTab('autoreply')" class="flex-1 py-4 px-6 font-semibold transition-all ${activeTab === 'autoreply' ? 'bg-white text-green-600 border-b-2 border-green-600' : 'text-gray-600 hover:bg-gray-100'}">
+                            💬 Auto Replies
+                        </button>
+                        <button onclick="window.setTab('setup')" class="flex-1 py-4 px-6 font-semibold transition-all ${activeTab === 'setup' ? 'bg-white text-green-600 border-b-2 border-green-600' : 'text-gray-600 hover:bg-gray-100'}">
+                            ⚙️ Setup
+                        </button>
+                    </div>
+
+                    <div class="p-6">
+                        ${activeTab === 'schedule' ? renderScheduleTab() : activeTab === 'autoreply' ? renderAutoReplyTab() : renderSetupTab()}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderScheduleTab() {
+            return `
+                <div class="space-y-6">
+                    <div class="bg-gradient-to-br from-green-50 to-teal-50 p-6 rounded-xl border-2 border-green-200">
+                        <h3 class="text-lg font-bold text-gray-800 mb-4">➕ Schedule New Message</h3>
+                        <div class="space-y-4">
+                            <input type="tel" id="msg-phone" placeholder="Phone Number (e.g., +1234567890)" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none">
+                            <textarea id="msg-text" placeholder="Your message..." class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none h-24"></textarea>
+                            <input type="datetime-local" id="msg-datetime" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none">
+                            <button onclick="window.addScheduledMessage()" class="w-full bg-gradient-to-r from-green-600 to-teal-600 text-white py-3 rounded-lg font-semibold hover:from-green-700 hover:to-teal-700 transition-all">
+                                Add to Schedule
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="space-y-3">
+                        <h3 class="text-lg font-bold text-gray-800">Upcoming Messages</h3>
+                        ${scheduledMessages.length === 0 ? '<div class="text-center py-12 text-gray-400"><p>📅 No scheduled messages yet</p></div>' : scheduledMessages.map(msg => `
+                            <div class="bg-white border-2 border-gray-200 rounded-lg p-4 hover:border-green-300 transition-all">
+                                <div class="flex justify-between items-start">
+                                    <div class="flex-1">
+                                        <div class="font-semibold text-gray-800">${msg.phone}</div>
+                                        <div class="text-gray-600 mt-1">${msg.message}</div>
+                                        <div class="text-sm text-gray-500 mt-2">📅 ${new Date(msg.datetime).toLocaleString()}</div>
+                                    </div>
+                                    <button onclick="window.deleteScheduledMessage(${msg.id})" class="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-all">🗑️</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderAutoReplyTab() {
+            return `
+                <div class="space-y-6">
+                    <div class="bg-gradient-to-br from-blue-50 to-teal-50 p-6 rounded-xl border-2 border-blue-200">
+                        <h3 class="text-lg font-bold text-gray-800 mb-4">➕ Add Auto Reply Rule</h3>
+                        <div class="space-y-4">
+                            <input type="text" id="reply-trigger" placeholder="Trigger message (e.g., 'are you there')" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none">
+                            <textarea id="reply-response" placeholder="Auto reply message" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none h-24"></textarea>
+                            <button onclick="window.addAutoReply()" class="w-full bg-gradient-to-r from-blue-600 to-teal-600 text-white py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-teal-700 transition-all">
+                                Add Reply Rule
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="space-y-3">
+                        <h3 class="text-lg font-bold text-gray-800">Active Reply Rules</h3>
+                        ${autoReplies.length === 0 ? '<div class="text-center py-12 text-gray-400"><p>💬 No auto reply rules configured</p></div>' : autoReplies.map(reply => `
+                            <div class="bg-white border-2 border-gray-200 rounded-lg p-4 hover:border-blue-300 transition-all">
+                                <div class="flex justify-between items-start">
+                                    <div class="flex-1">
+                                        <div class="text-sm text-gray-500 mb-1">When receives:</div>
+                                        <div class="font-semibold text-gray-800 mb-3">"${reply.trigger}"</div>
+                                        <div class="text-sm text-gray-500 mb-1">Auto reply with:</div>
+                                        <div class="text-gray-600">"${reply.response}"</div>
+                                    </div>
+                                    <button onclick="window.deleteAutoReply(${reply.id})" class="text-red-500 hover:bg-red-50 p-2 rounded-lg transition-all">🗑️</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderSetupTab() {
+            return `
+                <div class="space-y-6">
+                    <div class="bg-gradient-to-r from-green-50 to-blue-50 border-2 border-green-200 rounded-lg p-6">
+                        <h3 class="text-xl font-bold text-gray-800 mb-4">✅ Setup Complete!</h3>
+                        <p class="text-gray-700 mb-4">Your backend and frontend are on the same server. Everything is connected automatically!</p>
+                        
+                        <div class="bg-white p-4 rounded-lg border border-gray-200">
+                            <p class="font-semibold text-gray-800 mb-2">📱 Next Step: Connect WhatsApp</p>
+                            <a href="/qr" target="_blank" class="inline-block bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700 transition-all">
+                                Scan QR Code →
+                            </a>
+                            <p class="text-sm text-gray-600 mt-3">Open this link, scan the QR code with WhatsApp (Settings → Linked Devices), then come back here!</p>
+                        </div>
+                    </div>
+
+                    <div class="bg-white border-2 border-gray-200 rounded-lg p-6">
+                        <h3 class="text-xl font-bold text-gray-800 mb-4">🎯 How It Works</h3>
+                        <ul class="space-y-3 text-gray-700">
+                            <li class="flex items-start gap-3">
+                                <span class="text-green-600 font-bold">1.</span>
+                                <span>Schedule messages with date/time - they'll send automatically</span>
+                            </li>
+                            <li class="flex items-start gap-3">
+                                <span class="text-green-600 font-bold">2.</span>
+                                <span>Set auto-reply rules - bot responds when keywords match</span>
+                            </li>
+                            <li class="flex items-start gap-3">
+                                <span class="text-green-600 font-bold">3.</span>
+                                <span>Everything runs 24/7 on Railway's cloud servers</span>
+                            </li>
+                            <li class="flex items-start gap-3">
+                                <span class="text-green-600 font-bold">4.</span>
+                                <span>No phone needed - uses WhatsApp Web connection</span>
+                            </li>
+                        </ul>
+                    </div>
+
+                    <div class="bg-gradient-to-r from-purple-50 to-pink-50 border-2 border-purple-200 rounded-lg p-6">
+                        <h3 class="text-xl font-bold text-gray-800 mb-3">🚀 Features Status</h3>
+                        <div class="space-y-2">
+                            <div class="flex items-center gap-3">
+                                <span class="w-3 h-3 bg-green-500 rounded-full"></span>
+                                <span class="text-gray-700">✅ Scheduled Messages</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="w-3 h-3 bg-green-500 rounded-full"></span>
+                                <span class="text-gray-700">✅ Auto Replies</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="w-3 h-3 bg-gray-400 rounded-full"></span>
+                                <span class="text-gray-700">🔮 Status Scheduling (Coming Soon)</span>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span class="w-3 h-3 bg-gray-400 rounded-full"></span>
+                                <span class="text-gray-700">🤖 AI Bot (Coming Soon)</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        window.setTab = (tab) => {
+            activeTab = tab;
+            render();
+        };
+
+        window.addScheduledMessage = addScheduledMessage;
+        window.deleteScheduledMessage = deleteScheduledMessage;
+        window.addAutoReply = addAutoReply;
+        window.deleteAutoReply = deleteAutoReply;
+
+        // Initial render and status check
+        render();
+        checkConnection();
+        setInterval(checkConnection, 5000);
+    </script>
+</body>
+</html>

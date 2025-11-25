@@ -135,11 +135,81 @@ client.on('loading_screen', (percent, message) => {
     console.log(`⏳ Loading: ${percent}% - ${message}`);
 });
 
-// Handle incoming messages with enhanced business detection
+// Handle incoming messages - UPDATED TO SKIP GROUPS AND BUSINESSES
 client.on('message', async (message) => {
     if (!message.fromMe && whatsappReady) {
+        // NEW: Check if message is from a group
+        const chat = await message.getChat();
+        if (chat.isGroup) {
+            console.log(`🚫 Skipping group message from: ${chat.name}`);
+            return; // Don't respond to group messages
+        }
+        
         const incomingText = message.body.trim();
         const contact = message.from;
+        
+        // NEW: Enhanced business detection - check contact info first
+        try {
+            const chatContact = await message.getContact();
+            if (chatContact.isBusiness || chatContact.isEnterprise) {
+                console.log(`🚫 Skipping business account: ${contact}`);
+                return; // Don't respond to business accounts
+            }
+        } catch (error) {
+            console.error('Error checking contact info:', error.message);
+        }
+        
+        // Initialize business tracking if not exists
+        if (!businessContacts[contact]) {
+            businessContacts[contact] = {
+                isBusiness: false,
+                isVerified: false,
+                responseCount: 0,
+                detectionConfidence: 0
+            };
+        }
+        
+        const businessInfo = businessContacts[contact];
+        
+        // Advanced business pattern detection
+        const businessPatterns = {
+            automated: /\b(do not reply|automated|no-reply|noreply|this is an automated|bot)\b/i,
+            transactional: /\b(order|#\d+|invoice|receipt|tracking|OTP|verification code|\d{4,6}|transaction|payment)\b/i,
+            delivery: /\b(delivered|out for delivery|dispatched|courier|shipment|parcel)\b/i,
+            notifications: /\b(booking confirmed|appointment|reminder|alert|notification)\b/i,
+            marketing: /\b(offer|discount|sale|promo|coupon|limited time|shop now)\b/i
+        };
+        
+        let detectionScore = 0;
+        for (const [type, pattern] of Object.entries(businessPatterns)) {
+            if (pattern.test(incomingText)) {
+                detectionScore += 20;
+                console.log(`🔍 Business pattern detected: ${type}`);
+            }
+        }
+        
+        // URL detection (common in business messages)
+        if (/https?:\/\//.test(incomingText)) {
+            detectionScore += 15;
+        }
+        
+        // Short numeric codes (OTP, order IDs)
+        if (/^\d{4,8}$/.test(incomingText.trim())) {
+            detectionScore += 25;
+        }
+        
+        // Update business status
+        if (detectionScore >= 20) {
+            businessInfo.isBusiness = true;
+            businessInfo.detectionConfidence = Math.min(100, businessInfo.detectionConfidence + detectionScore);
+            saveData(BUSINESS_CONTACTS_FILE, businessContacts);
+        }
+        
+        // NEW: If detected as business, don't respond at all
+        if (businessInfo.isBusiness) {
+            console.log(`🚫 Skipping business message from ${contact} (Confidence: ${businessInfo.detectionConfidence}%)`);
+            return; // Don't respond to business messages
+        }
         
         // Check keyword-based auto-reply rules first
         const incomingLower = incomingText.toLowerCase();
@@ -151,7 +221,7 @@ client.on('message', async (message) => {
             }
         }
         
-        // If AI is enabled, use intelligent responses
+        // If AI is enabled, use intelligent responses (only for non-business contacts)
         if (aiSettings.enabled && aiSettings.apiKey) {
             try {
                 const aiResponse = await generateAIResponse(contact, incomingText, message);
@@ -209,7 +279,7 @@ if (!isInitializing) {
     });
 }
 
-// AI Response Generator with enhanced business detection
+// AI Response Generator - SIMPLIFIED (no business response logic)
 async function generateAIResponse(contact, messageText, messageObj) {
     // Initialize conversation history for contact
     if (!conversationHistory[contact]) {
@@ -222,70 +292,8 @@ async function generateAIResponse(contact, messageText, messageObj) {
         };
     }
     
-    // Initialize business tracking
-    if (!businessContacts[contact]) {
-        businessContacts[contact] = {
-            isBusiness: false,
-            isVerified: false,
-            responseCount: 0,
-            detectionConfidence: 0
-        };
-    }
-    
     const history = conversationHistory[contact];
-    const businessInfo = businessContacts[contact];
     history.messageCount++;
-    
-    // Enhanced business detection
-    try {
-        const chatContact = await messageObj.getContact();
-        if (chatContact.isBusiness || chatContact.isEnterprise) {
-            businessInfo.isBusiness = true;
-            businessInfo.isVerified = true;
-            businessInfo.detectionConfidence = 100;
-        }
-    } catch (error) {
-        // Continue with heuristic detection
-    }
-    
-    // Advanced business pattern detection
-    const businessPatterns = {
-        automated: /\b(do not reply|automated|no-reply|noreply|this is an automated|bot)\b/i,
-        transactional: /\b(order|#\d+|invoice|receipt|tracking|OTP|verification code|\d{4,6}|transaction|payment)\b/i,
-        delivery: /\b(delivered|out for delivery|dispatched|courier|shipment|parcel)\b/i,
-        notifications: /\b(booking confirmed|appointment|reminder|alert|notification)\b/i,
-        marketing: /\b(offer|discount|sale|promo|coupon|limited time|shop now)\b/i
-    };
-    
-    let detectionScore = 0;
-    for (const [type, pattern] of Object.entries(businessPatterns)) {
-        if (pattern.test(messageText)) {
-            detectionScore += 20;
-            console.log(`🔍 Business pattern detected: ${type}`);
-        }
-    }
-    
-    // URL detection (common in business messages)
-    if (/https?:\/\//.test(messageText)) {
-        detectionScore += 15;
-    }
-    
-    // Short numeric codes (OTP, order IDs)
-    if (/^\d{4,8}$/.test(messageText.trim())) {
-        detectionScore += 25;
-    }
-    
-    // Update business status
-    if (detectionScore >= 20) {
-        businessInfo.isBusiness = true;
-        businessInfo.detectionConfidence = Math.min(100, businessInfo.detectionConfidence + detectionScore);
-    }
-    
-    // CRITICAL: For businesses, respond ONLY ONCE
-    if (businessInfo.isBusiness && businessInfo.responseCount >= 1) {
-        console.log(`🚫 Skipping business reply for ${contact} (already responded ${businessInfo.responseCount} time(s))`);
-        return null;
-    }
     
     // Rate limiting: Don't spam responses
     const timeSinceLastResponse = Date.now() - history.lastResponseTime;
@@ -315,28 +323,10 @@ async function generateAIResponse(contact, messageText, messageObj) {
     const emergencyKeywords = ['emergency', 'urgent', 'help', 'critical', 'immediately', 'asap', 'zaruri', 'turant', 'jaldi', 'please help', 'SOS', 'crisis'];
     const isEmergency = emergencyKeywords.some(keyword => messageText.toLowerCase().includes(keyword));
     
-    // Build system prompt with business handling
-    let systemPrompt = `You are the Personal Assistant (PA) of ${aiSettings.userName || 'your boss'}.`;
-    
-    if (businessInfo.isBusiness) {
-        systemPrompt += `\n\n🚨 BUSINESS MESSAGE DETECTED (Confidence: ${businessInfo.detectionConfidence}%):
-This appears to be an automated business/transactional message (order confirmation, OTP, delivery update, etc.).
+    // Build system prompt
+    let systemPrompt = `You are the Personal Assistant (PA) of ${aiSettings.userName || 'your boss'}.
 
-RESPOND WITH EXACTLY ONE BRIEF MESSAGE (10-15 words max):
-- Acknowledge receipt politely
-- DO NOT ask questions
-- DO NOT continue conversation
-- DO NOT offer help
-- Keep it minimal like: "Thank you, noted." or "Received, thanks."
-
-Examples:
-- "Thank you for the confirmation."
-- "Noted, thanks."
-- "Received."
-
-This is your ONLY response to this contact. No follow-ups.`;
-    } else {
-        systemPrompt += `\n\nCRITICAL RULES:
+CRITICAL RULES:
 1. NEVER reveal you are an AI, bot, ChatGPT, or automated system
 2. You are a HUMAN personal assistant
 3. ${!history.hasIntroduced ? 'Introduce yourself briefly as ' + (aiSettings.userName || 'your boss') + '\'s PA' : 'Continue naturally'}
@@ -345,7 +335,6 @@ This is your ONLY response to this contact. No follow-ups.`;
 6. Be professional, warm, and helpful
 7. If you don't know, say you'll check with ${aiSettings.userName || 'your boss'}
 8. NEVER mention AI, technology, or programming terms`;
-    }
     
     if (isEmergency) {
         systemPrompt += `\n\n⚠️ EMERGENCY DETECTED: Acknowledge urgency and assure immediate escalation to ${aiSettings.userName || 'your boss'}.`;
@@ -370,8 +359,8 @@ This is your ONLY response to this contact. No follow-ups.`;
             body: JSON.stringify({
                 model: 'gpt-4o-mini',
                 messages: messages,
-                temperature: businessInfo.isBusiness ? 0.3 : 0.8,
-                max_tokens: businessInfo.isBusiness ? 30 : 120
+                temperature: 0.8,
+                max_tokens: 120
             }),
             signal: controller.signal
         });
@@ -395,7 +384,6 @@ This is your ONLY response to this contact. No follow-ups.`;
         
         history.hasIntroduced = true;
         history.lastResponseTime = Date.now();
-        businessInfo.responseCount++;
         
         // Handle emergency notification
         if (isEmergency && aiSettings.emergencyNumber) {

@@ -20,8 +20,9 @@
         const API_URL = window.location.origin;
 
         let activeTab = 'schedule';
-        let scheduledMessages = JSON.parse(localStorage.getItem('scheduledMessages') || '[]');
-        let autoReplies = JSON.parse(localStorage.getItem('autoReplies') || '[]');
+        let scheduledMessages = [];
+        let autoReplies = [];
+        let aiSettings = {enabled: false, apiKey: '', emergencyNumber: '', userName: ''};
         let connectionStatus = 'disconnected';
 
         async function checkConnection() {
@@ -30,7 +31,6 @@
                 const data = await res.json();
                 const newStatus = data.whatsappConnected ? 'connected' : 'disconnected';
                 
-                // Only re-render if status actually changed
                 if (newStatus !== connectionStatus) {
                     connectionStatus = newStatus;
                     updateStatusBadge();
@@ -40,6 +40,32 @@
                     connectionStatus = 'error';
                     updateStatusBadge();
                 }
+            }
+        }
+
+        async function loadData() {
+            try {
+                const [msgsRes, repliesRes, aiRes] = await Promise.all([
+                    fetch(`${API_URL}/scheduled-messages`),
+                    fetch(`${API_URL}/auto-replies`),
+                    fetch(`${API_URL}/ai-settings`)
+                ]);
+                
+                scheduledMessages = await msgsRes.json();
+                autoReplies = await repliesRes.json();
+                const aiData = await aiRes.json();
+                
+                // Update AI settings but keep the actual API key if it was set
+                if (aiData.apiKey === '***hidden***' && aiSettings.apiKey) {
+                    aiData.apiKey = aiSettings.apiKey;
+                }
+                aiSettings = aiData;
+                
+                if (activeTab === 'schedule') renderScheduleTab();
+                else if (activeTab === 'autoreply') renderAutoReplyTab();
+                else renderSetupTab();
+            } catch (err) {
+                console.error('Failed to load data:', err);
             }
         }
 
@@ -68,6 +94,11 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(autoReplies)
                 });
+                await fetch(`${API_URL}/ai-settings`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(aiSettings)
+                });
             } catch (err) {
                 console.error('Sync failed:', err);
             }
@@ -80,7 +111,6 @@
 
             if (phone && message && datetime) {
                 scheduledMessages.push({ phone, message, datetime, id: Date.now(), status: 'pending' });
-                localStorage.setItem('scheduledMessages', JSON.stringify(scheduledMessages));
                 syncWithBackend();
                 document.getElementById('msg-phone').value = '';
                 document.getElementById('msg-text').value = '';
@@ -91,7 +121,6 @@
 
         function deleteScheduledMessage(id) {
             scheduledMessages = scheduledMessages.filter(msg => msg.id !== id);
-            localStorage.setItem('scheduledMessages', JSON.stringify(scheduledMessages));
             syncWithBackend();
             renderScheduleTab();
         }
@@ -102,7 +131,6 @@
 
             if (trigger && response) {
                 autoReplies.push({ trigger, response, id: Date.now() });
-                localStorage.setItem('autoReplies', JSON.stringify(autoReplies));
                 syncWithBackend();
                 document.getElementById('reply-trigger').value = '';
                 document.getElementById('reply-response').value = '';
@@ -112,7 +140,6 @@
 
         function deleteAutoReply(id) {
             autoReplies = autoReplies.filter(reply => reply.id !== id);
-            localStorage.setItem('autoReplies', JSON.stringify(autoReplies));
             syncWithBackend();
             renderAutoReplyTab();
         }
@@ -124,7 +151,7 @@
                     <div class="bg-gradient-to-br from-green-50 to-teal-50 p-6 rounded-xl border-2 border-green-200">
                         <h3 class="text-lg font-bold text-gray-800 mb-4">➕ Schedule New Message</h3>
                         <div class="space-y-4">
-                            <input type="tel" id="msg-phone" placeholder="Phone Number (e.g., +1234567890)" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none">
+                            <input type="tel" id="msg-phone" placeholder="Phone Number (e.g., +919876543210)" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none">
                             <textarea id="msg-text" placeholder="Your message..." class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none h-24"></textarea>
                             <input type="datetime-local" id="msg-datetime" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none">
                             <button onclick="window.addScheduledMessage()" class="w-full bg-gradient-to-r from-green-600 to-teal-600 text-white py-3 rounded-lg font-semibold hover:from-green-700 hover:to-teal-700 transition-all">
@@ -159,7 +186,7 @@
                     <div class="bg-gradient-to-br from-blue-50 to-teal-50 p-6 rounded-xl border-2 border-blue-200">
                         <h3 class="text-lg font-bold text-gray-800 mb-4">➕ Add Auto Reply Rule</h3>
                         <div class="space-y-4">
-                            <input type="text" id="reply-trigger" placeholder="Trigger message (e.g., 'are you there')" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none">
+                            <input type="text" id="reply-trigger" placeholder="Trigger message (e.g., 'price list')" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none">
                             <textarea id="reply-response" placeholder="Auto reply message" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none h-24"></textarea>
                             <button onclick="window.addAutoReply()" class="w-full bg-gradient-to-r from-blue-600 to-teal-600 text-white py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-teal-700 transition-all">
                                 Add Reply Rule
@@ -189,39 +216,78 @@
 
         function renderSetupTab() {
             const content = document.getElementById('tab-content');
+            const apiKeyDisplay = aiSettings.apiKey && aiSettings.apiKey !== '***hidden***' ? aiSettings.apiKey : '';
+            
             content.innerHTML = `
                 <div class="space-y-6">
+                    <!-- AI PA Settings -->
+                    <div class="bg-gradient-to-br from-purple-50 to-pink-50 p-6 rounded-xl border-2 border-purple-200">
+                        <h3 class="text-lg font-bold text-gray-800 mb-4">🤖 AI Personal Assistant Settings</h3>
+                        <div class="space-y-4">
+                            <div>
+                                <label class="block text-sm font-semibold text-gray-700 mb-2">Your Name</label>
+                                <input type="text" id="ai-username" value="${aiSettings.userName || ''}" placeholder="e.g., Rahul Kumar" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none">
+                                <p class="text-xs text-gray-500 mt-1">AI will introduce itself as YOUR Personal Assistant</p>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-semibold text-gray-700 mb-2">OpenAI API Key</label>
+                                <input type="password" id="ai-apikey" value="${apiKeyDisplay}" placeholder="sk-proj-..." class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none">
+                                <p class="text-xs text-gray-500 mt-1">Get your API key from <a href="https://platform.openai.com/api-keys" target="_blank" class="text-blue-600 underline">OpenAI Platform</a></p>
+                            </div>
+                            
+                            <div>
+                                <label class="block text-sm font-semibold text-gray-700 mb-2">Emergency Alert Number</label>
+                                <input type="tel" id="ai-emergency" value="${aiSettings.emergencyNumber || ''}" placeholder="+919876543210" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none">
+                                <p class="text-xs text-gray-500 mt-1">You'll receive instant alerts here for emergency messages</p>
+                            </div>
+                            
+                            <div class="flex items-center gap-3 bg-white p-4 rounded-lg border-2 ${aiSettings.enabled ? 'border-purple-500' : 'border-gray-200'}">
+                                <input type="checkbox" id="ai-enabled" ${aiSettings.enabled ? 'checked' : ''} class="w-5 h-5 text-purple-600 rounded focus:ring-2 focus:ring-purple-500">
+                                <label for="ai-enabled" class="font-semibold text-gray-800">Enable AI Personal Assistant</label>
+                            </div>
+                            
+                            <button onclick="window.saveAISettings()" class="w-full bg-gradient-to-r from-purple-600 to-pink-600 text-white py-3 rounded-lg font-semibold hover:from-purple-700 hover:to-pink-700 transition-all">
+                                💾 Save AI Settings
+                            </button>
+                        </div>
+                    </div>
+
                     <div class="bg-gradient-to-r from-green-50 to-blue-50 border-2 border-green-200 rounded-lg p-6">
-                        <h3 class="text-xl font-bold text-gray-800 mb-4">✅ Setup Complete!</h3>
-                        <p class="text-gray-700 mb-4">Your backend and frontend are on the same server. Everything is connected automatically!</p>
+                        <h3 class="text-xl font-bold text-gray-800 mb-4">✅ WhatsApp Connection</h3>
+                        <p class="text-gray-700 mb-4">Connect your WhatsApp to start automating!</p>
                         
                         <div class="bg-white p-4 rounded-lg border border-gray-200">
-                            <p class="font-semibold text-gray-800 mb-2">📱 Next Step: Connect WhatsApp</p>
+                            <p class="font-semibold text-gray-800 mb-2">📱 Step 1: Scan QR Code</p>
                             <a href="/qr" target="_blank" class="inline-block bg-green-600 text-white px-6 py-3 rounded-lg font-semibold hover:bg-green-700 transition-all">
                                 Scan QR Code →
                             </a>
-                            <p class="text-sm text-gray-600 mt-3">Open this link, scan the QR code with WhatsApp (Settings → Linked Devices), then come back here!</p>
+                            <p class="text-sm text-gray-600 mt-3">Open WhatsApp → Settings → Linked Devices → Link a Device → Scan</p>
                         </div>
                     </div>
 
                     <div class="bg-white border-2 border-gray-200 rounded-lg p-6">
-                        <h3 class="text-xl font-bold text-gray-800 mb-4">🎯 How It Works</h3>
+                        <h3 class="text-xl font-bold text-gray-800 mb-4">🎯 How AI PA Works</h3>
                         <ul class="space-y-3 text-gray-700">
                             <li class="flex items-start gap-3">
-                                <span class="text-green-600 font-bold">1.</span>
-                                <span>Schedule messages with date/time - they'll send automatically</span>
+                                <span class="text-purple-600 font-bold">1.</span>
+                                <span><strong>First Contact:</strong> AI introduces itself as your Personal Assistant</span>
                             </li>
                             <li class="flex items-start gap-3">
-                                <span class="text-green-600 font-bold">2.</span>
-                                <span>Set auto-reply rules - bot responds when keywords match</span>
+                                <span class="text-purple-600 font-bold">2.</span>
+                                <span><strong>Smart Language:</strong> Responds in Hinglish or English based on sender's language</span>
                             </li>
                             <li class="flex items-start gap-3">
-                                <span class="text-green-600 font-bold">3.</span>
-                                <span>Everything runs 24/7 on cloud servers</span>
+                                <span class="text-purple-600 font-bold">3.</span>
+                                <span><strong>Emergency Detection:</strong> Keywords like "urgent", "emergency", "zaruri" trigger instant alerts to you</span>
                             </li>
                             <li class="flex items-start gap-3">
-                                <span class="text-green-600 font-bold">4.</span>
-                                <span>No phone needed - uses WhatsApp Web connection</span>
+                                <span class="text-purple-600 font-bold">4.</span>
+                                <span><strong>Context Memory:</strong> Remembers conversation history for natural replies</span>
+                            </li>
+                            <li class="flex items-start gap-3">
+                                <span class="text-purple-600 font-bold">5.</span>
+                                <span><strong>Human-like:</strong> NEVER reveals it's an AI - acts as your professional PA</span>
                             </li>
                         </ul>
                     </div>
@@ -235,17 +301,22 @@
                             </div>
                             <div class="flex items-center gap-3">
                                 <span class="w-3 h-3 bg-green-500 rounded-full"></span>
-                                <span class="text-gray-700">✅ Auto Replies</span>
+                                <span class="text-gray-700">✅ Keyword Auto Replies</span>
                             </div>
                             <div class="flex items-center gap-3">
-                                <span class="w-3 h-3 bg-gray-400 rounded-full"></span>
-                                <span class="text-gray-700">🔮 Status Scheduling (Coming Soon)</span>
+                                <span class="w-3 h-3 ${aiSettings.enabled ? 'bg-green-500' : 'bg-yellow-500'} rounded-full ${aiSettings.enabled ? '' : 'animate-pulse'}"></span>
+                                <span class="text-gray-700">${aiSettings.enabled ? '✅ AI Personal Assistant - ACTIVE' : '⚡ AI Personal Assistant - Configure Above'}</span>
                             </div>
                             <div class="flex items-center gap-3">
-                                <span class="w-3 h-3 bg-gray-400 rounded-full"></span>
-                                <span class="text-gray-700">🤖 AI Bot (Coming Soon)</span>
+                                <span class="w-3 h-3 ${aiSettings.enabled ? 'bg-green-500' : 'bg-yellow-500'} rounded-full"></span>
+                                <span class="text-gray-700">${aiSettings.enabled ? '✅ Emergency Detection - ACTIVE' : '⚡ Emergency Detection - Enable AI PA'}</span>
                             </div>
                         </div>
+                    </div>
+
+                    <div class="bg-yellow-50 border-2 border-yellow-300 rounded-lg p-4">
+                        <h4 class="font-bold text-yellow-800 mb-2">⚠️ Cost Information</h4>
+                        <p class="text-sm text-yellow-700">OpenAI GPT-4o-mini costs approximately $0.0001-0.0002 per message. For 1000 messages/month, expect ~$0.10-0.20 in costs.</p>
                     </div>
                 </div>
             `;
@@ -254,14 +325,12 @@
         function setTab(tab) {
             activeTab = tab;
             
-            // Update tab buttons
             document.querySelectorAll('[data-tab]').forEach(btn => {
                 btn.className = btn.getAttribute('data-tab') === tab
                     ? 'flex-1 py-4 px-6 font-semibold transition-all bg-white text-green-600 border-b-2 border-green-600'
                     : 'flex-1 py-4 px-6 font-semibold transition-all text-gray-600 hover:bg-gray-100';
             });
             
-            // Render appropriate tab content
             if (tab === 'schedule') renderScheduleTab();
             else if (tab === 'autoreply') renderAutoReplyTab();
             else renderSetupTab();
@@ -283,7 +352,7 @@
                                     <svg class="w-9 h-9" fill="currentColor" viewBox="0 0 20 20"><path d="M2 5a2 2 0 012-2h7a2 2 0 012 2v4a2 2 0 01-2 2H9l-3 3v-3H4a2 2 0 01-2-2V5z"/><path d="M15 7v2a4 4 0 01-4 4H9.828l-1.766 1.767c.28.149.599.233.938.233h2l3 3v-3h2a2 2 0 002-2V9a2 2 0 00-2-2h-1z"/></svg>
                                     WhatsApp Automation Hub
                                 </h1>
-                                <p class="text-green-100 mt-2">Schedule messages & auto-reply system</p>
+                                <p class="text-green-100 mt-2">AI Personal Assistant + Automation</p>
                             </div>
                             <div id="status-badge" class="flex items-center gap-2 bg-white/20 px-4 py-2 rounded-lg">
                                 ${statusBadge}
@@ -293,13 +362,13 @@
 
                     <div class="flex border-b bg-gray-50">
                         <button data-tab="schedule" onclick="window.setTab('schedule')" class="flex-1 py-4 px-6 font-semibold transition-all bg-white text-green-600 border-b-2 border-green-600">
-                            📅 Scheduled Messages
+                            📅 Scheduled
                         </button>
                         <button data-tab="autoreply" onclick="window.setTab('autoreply')" class="flex-1 py-4 px-6 font-semibold transition-all text-gray-600 hover:bg-gray-100">
-                            💬 Auto Replies
+                            💬 Auto Reply
                         </button>
                         <button data-tab="setup" onclick="window.setTab('setup')" class="flex-1 py-4 px-6 font-semibold transition-all text-gray-600 hover:bg-gray-100">
-                            ⚙️ Setup
+                            🤖 AI Setup
                         </button>
                     </div>
 
@@ -310,17 +379,31 @@
             renderScheduleTab();
         }
 
-        // Expose functions to window
         window.setTab = setTab;
         window.addScheduledMessage = addScheduledMessage;
         window.deleteScheduledMessage = deleteScheduledMessage;
         window.addAutoReply = addAutoReply;
         window.deleteAutoReply = deleteAutoReply;
+        window.saveAISettings = async function() {
+            const apiKey = document.getElementById('ai-apikey').value;
+            
+            aiSettings = {
+                enabled: document.getElementById('ai-enabled').checked,
+                apiKey: apiKey || aiSettings.apiKey, // Keep existing if not changed
+                emergencyNumber: document.getElementById('ai-emergency').value,
+                userName: document.getElementById('ai-username').value
+            };
+            
+            await syncWithBackend();
+            alert('✅ AI Settings saved! Your PA is now ' + (aiSettings.enabled ? 'ACTIVE 🤖' : 'inactive'));
+            renderSetupTab();
+        };
 
-        // Initial render and status check
         initialRender();
+        loadData();
         checkConnection();
         setInterval(checkConnection, 5000);
+        setInterval(loadData, 15000);
     </script>
 </body>
 </html>

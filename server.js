@@ -20,30 +20,36 @@ const SCHEDULED_FILE = path.join(DATA_DIR, 'scheduled.json');
 const REPLIES_FILE = path.join(DATA_DIR, 'replies.json');
 const AI_SETTINGS_FILE = path.join(DATA_DIR, 'ai_settings.json');
 const CONVERSATION_FILE = path.join(DATA_DIR, 'conversations.json');
+const BUSINESS_CONTACTS_FILE = path.join(DATA_DIR, 'business_contacts.json');
 
 // Ensure data directory exists
 if (!fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
 }
 
-// Load persisted data
+// Load persisted data with error handling
 function loadData(filepath, defaultValue = []) {
     try {
         if (fs.existsSync(filepath)) {
-            return JSON.parse(fs.readFileSync(filepath, 'utf8'));
+            const data = fs.readFileSync(filepath, 'utf8');
+            return JSON.parse(data);
         }
     } catch (error) {
-        console.error(`Error loading ${filepath}:`, error.message);
+        console.error(`⚠️ Error loading ${filepath}:`, error.message);
     }
     return defaultValue;
 }
 
-// Save data to file
+// Save data to file with atomic write
 function saveData(filepath, data) {
     try {
-        fs.writeFileSync(filepath, JSON.stringify(data, null, 2));
+        const tempFile = filepath + '.tmp';
+        fs.writeFileSync(tempFile, JSON.stringify(data, null, 2));
+        fs.renameSync(tempFile, filepath);
+        return true;
     } catch (error) {
-        console.error(`Error saving ${filepath}:`, error.message);
+        console.error(`❌ Error saving ${filepath}:`, error.message);
+        return false;
     }
 }
 
@@ -52,15 +58,16 @@ let scheduledMessages = loadData(SCHEDULED_FILE, []);
 let autoReplies = loadData(REPLIES_FILE, []);
 let aiSettings = loadData(AI_SETTINGS_FILE, { enabled: false, apiKey: '', emergencyNumber: '', userName: '' });
 let conversationHistory = loadData(CONVERSATION_FILE, {});
+let businessContacts = loadData(BUSINESS_CONTACTS_FILE, {});
 let qrCodeData = null;
 let whatsappReady = false;
-let reconnectAttempts = 0;
-const MAX_RECONNECT_ATTEMPTS = 5;
+let isInitializing = false;
 
-// Initialize WhatsApp Client with better stability
+// Initialize WhatsApp Client with enhanced stability
 const client = new Client({
     authStrategy: new LocalAuth({
-        dataPath: path.join(__dirname, '.wwebjs_auth')
+        dataPath: path.join(__dirname, '.wwebjs_auth'),
+        clientId: 'whatsapp-automation-v1'
     }),
     puppeteer: {
         headless: true,
@@ -71,13 +78,16 @@ const client = new Client({
             '--disable-accelerated-2d-canvas',
             '--no-first-run',
             '--no-zygote',
+            '--single-process',
             '--disable-gpu',
             '--disable-extensions',
             '--disable-background-timer-throttling',
             '--disable-backgrounding-occluded-windows',
-            '--disable-renderer-backgrounding'
+            '--disable-renderer-backgrounding',
+            '--disable-web-security',
+            '--disable-features=IsolateOrigins,site-per-process'
         ],
-        timeout: 60000
+        timeout: 90000
     },
     webVersionCache: {
         type: 'remote',
@@ -88,16 +98,19 @@ const client = new Client({
 // QR Code generation
 client.on('qr', async (qr) => {
     console.log('📱 QR Code received, scan with WhatsApp app');
-    qrCodeData = await qrcode.toDataURL(qr);
-    reconnectAttempts = 0;
+    try {
+        qrCodeData = await qrcode.toDataURL(qr);
+    } catch (error) {
+        console.error('❌ QR Code generation error:', error.message);
+    }
 });
 
 // WhatsApp ready
 client.on('ready', () => {
     console.log('✅ WhatsApp Client is ready!');
     whatsappReady = true;
+    isInitializing = false;
     qrCodeData = null;
-    reconnectAttempts = 0;
 });
 
 // WhatsApp authenticated
@@ -109,19 +122,22 @@ client.on('authenticated', () => {
 client.on('auth_failure', (msg) => {
     console.error('❌ Authentication failure:', msg);
     whatsappReady = false;
+    isInitializing = false;
     
-    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-        reconnectAttempts++;
-        console.log(`🔄 Reconnection attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}...`);
-        setTimeout(() => {
-            client.initialize();
-        }, 5000);
-    }
+    // Clear auth data and require re-scan
+    setTimeout(() => {
+        console.log('🔄 Please scan QR code again at /qr');
+    }, 2000);
 });
 
-// Handle incoming messages with business detection
+// Loading screen
+client.on('loading_screen', (percent, message) => {
+    console.log(`⏳ Loading: ${percent}% - ${message}`);
+});
+
+// Handle incoming messages with enhanced business detection
 client.on('message', async (message) => {
-    if (!message.fromMe) {
+    if (!message.fromMe && whatsappReady) {
         const incomingText = message.body.trim();
         const contact = message.from;
         
@@ -143,8 +159,9 @@ client.on('message', async (message) => {
                     await message.reply(aiResponse);
                     console.log(`🤖 AI replied to: ${contact}`);
                     
-                    // Save conversation history after response
+                    // Save conversation history and business contacts
                     saveData(CONVERSATION_FILE, conversationHistory);
+                    saveData(BUSINESS_CONTACTS_FILE, businessContacts);
                 }
             } catch (error) {
                 console.error('❌ AI response error:', error.message);
@@ -153,138 +170,195 @@ client.on('message', async (message) => {
     }
 });
 
-// Handle disconnection with auto-reconnect
+// Handle disconnection with better recovery
 client.on('disconnected', (reason) => {
     console.log('⚠️ WhatsApp disconnected:', reason);
     whatsappReady = false;
     
-    if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-        reconnectAttempts++;
-        console.log(`🔄 Auto-reconnecting... Attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}`);
+    // Don't auto-reconnect on logout - require QR scan
+    if (reason === 'LOGOUT') {
+        console.log('🔑 Logged out. Please scan QR code again.');
+        qrCodeData = null;
+    } else if (!isInitializing) {
+        console.log('🔄 Attempting to reconnect...');
+        isInitializing = true;
         setTimeout(() => {
-            client.initialize();
-        }, 10000);
-    } else {
-        console.error('❌ Max reconnection attempts reached. Please restart the server or rescan QR code.');
+            client.initialize().catch(err => {
+                console.error('❌ Reconnection failed:', err.message);
+                isInitializing = false;
+            });
+        }, 5000);
     }
 });
 
-// Keep connection alive
-setInterval(() => {
-    if (whatsappReady) {
-        client.getState().then(state => {
-            if (state !== 'CONNECTED') {
-                console.log('⚠️ Connection state changed:', state);
-                whatsappReady = false;
-            }
-        }).catch(() => {
-            console.log('⚠️ Connection check failed');
-            whatsappReady = false;
-        });
+// Connection state monitoring
+client.on('change_state', state => {
+    console.log('🔄 Connection state changed:', state);
+    if (state === 'CONFLICT' || state === 'UNPAIRED') {
+        whatsappReady = false;
+        console.log('⚠️ Connection conflict detected. Please check WhatsApp app.');
     }
-}, 30000);
+});
 
 // Initialize WhatsApp client
-client.initialize();
+if (!isInitializing) {
+    isInitializing = true;
+    client.initialize().catch(err => {
+        console.error('❌ Initialization failed:', err.message);
+        isInitializing = false;
+    });
+}
 
-// AI Response Generator with business detection
+// AI Response Generator with enhanced business detection
 async function generateAIResponse(contact, messageText, messageObj) {
+    // Initialize conversation history for contact
     if (!conversationHistory[contact]) {
         conversationHistory[contact] = {
             messages: [],
             hasIntroduced: false,
             messageCount: 0,
+            firstMessageTime: Date.now(),
+            lastResponseTime: 0
+        };
+    }
+    
+    // Initialize business tracking
+    if (!businessContacts[contact]) {
+        businessContacts[contact] = {
             isBusiness: false,
-            firstMessageTime: Date.now()
+            isVerified: false,
+            responseCount: 0,
+            detectionConfidence: 0
         };
     }
     
     const history = conversationHistory[contact];
+    const businessInfo = businessContacts[contact];
     history.messageCount++;
     
-    // Detect if this is a business account
+    // Enhanced business detection
     try {
         const chatContact = await messageObj.getContact();
-        if (chatContact.isBusiness) {
-            history.isBusiness = true;
+        if (chatContact.isBusiness || chatContact.isEnterprise) {
+            businessInfo.isBusiness = true;
+            businessInfo.isVerified = true;
+            businessInfo.detectionConfidence = 100;
         }
     } catch (error) {
-        // Continue if contact info unavailable
+        // Continue with heuristic detection
     }
     
-    // Business detection heuristics
-    const businessKeywords = [
-        'order', 'delivery', 'payment', 'invoice', 'booking', 'appointment',
-        'service', 'product', 'price', 'cost', 'purchase', 'buy',
-        'confirm', 'verification', 'otp', 'code', 'account', 'subscription'
-    ];
-    const containsBusinessKeywords = businessKeywords.some(keyword => 
-        messageText.toLowerCase().includes(keyword)
-    );
+    // Advanced business pattern detection
+    const businessPatterns = {
+        automated: /\b(do not reply|automated|no-reply|noreply|this is an automated|bot)\b/i,
+        transactional: /\b(order|#\d+|invoice|receipt|tracking|OTP|verification code|\d{4,6}|transaction|payment)\b/i,
+        delivery: /\b(delivered|out for delivery|dispatched|courier|shipment|parcel)\b/i,
+        notifications: /\b(booking confirmed|appointment|reminder|alert|notification)\b/i,
+        marketing: /\b(offer|discount|sale|promo|coupon|limited time|shop now)\b/i
+    };
     
-    if (containsBusinessKeywords) {
-        history.isBusiness = true;
+    let detectionScore = 0;
+    for (const [type, pattern] of Object.entries(businessPatterns)) {
+        if (pattern.test(messageText)) {
+            detectionScore += 20;
+            console.log(`🔍 Business pattern detected: ${type}`);
+        }
     }
     
-    // For businesses: Only reply ONCE with brief introduction
-    if (history.isBusiness && history.messageCount > 1) {
-        console.log(`🚫 Skipping business reply for ${contact} (message #${history.messageCount})`);
-        return null; // Don't respond to subsequent business messages
+    // URL detection (common in business messages)
+    if (/https?:\/\//.test(messageText)) {
+        detectionScore += 15;
+    }
+    
+    // Short numeric codes (OTP, order IDs)
+    if (/^\d{4,8}$/.test(messageText.trim())) {
+        detectionScore += 25;
+    }
+    
+    // Update business status
+    if (detectionScore >= 20) {
+        businessInfo.isBusiness = true;
+        businessInfo.detectionConfidence = Math.min(100, businessInfo.detectionConfidence + detectionScore);
+    }
+    
+    // CRITICAL: For businesses, respond ONLY ONCE
+    if (businessInfo.isBusiness && businessInfo.responseCount >= 1) {
+        console.log(`🚫 Skipping business reply for ${contact} (already responded ${businessInfo.responseCount} time(s))`);
+        return null;
+    }
+    
+    // Rate limiting: Don't spam responses
+    const timeSinceLastResponse = Date.now() - history.lastResponseTime;
+    if (timeSinceLastResponse < 3000 && history.messageCount > 1) {
+        console.log(`⏱️ Rate limiting: Too soon since last response`);
+        return null;
     }
     
     // Add user message to history
     history.messages.push({
         role: 'user',
-        content: messageText
+        content: messageText,
+        timestamp: Date.now()
     });
     
-    // Keep only last 8 messages for context (reduced for efficiency)
-    if (history.messages.length > 8) {
-        history.messages = history.messages.slice(-8);
+    // Keep only last 6 messages for context (optimized)
+    if (history.messages.length > 6) {
+        history.messages = history.messages.slice(-6);
     }
     
     // Detect language
     const hasHindi = /[\u0900-\u097F]/.test(messageText);
-    const hinglishPattern = /\b(hai|hoon|kya|kaise|kar|raha|rahe|nahi|haan|acha|theek|bhai|yaar|kahan|kab|kyu|batao|bolo|suno|achha|thik|abhi|kal|aaj)\b/i;
+    const hinglishPattern = /\b(hai|hoon|kya|kaise|kar|raha|rahe|nahi|haan|acha|theek|bhai|yaar|kahan|kab|kyu|batao|bolo|suno|achha|thik|abhi|kal|aaj|please|help)\b/i;
     const isHinglish = hinglishPattern.test(messageText) || hasHindi;
     
     // Detect emergency keywords
-    const emergencyKeywords = ['emergency', 'urgent', 'help', 'critical', 'immediately', 'asap', 'zaruri', 'turant', 'jaldi', 'please help', 'SOS'];
+    const emergencyKeywords = ['emergency', 'urgent', 'help', 'critical', 'immediately', 'asap', 'zaruri', 'turant', 'jaldi', 'please help', 'SOS', 'crisis'];
     const isEmergency = emergencyKeywords.some(keyword => messageText.toLowerCase().includes(keyword));
     
-    // Build system prompt
-    const businessInstruction = history.isBusiness 
-        ? '\n\n🚨 BUSINESS DETECTED: This appears to be an automated business message (order/delivery/OTP etc). Give ONE brief, polite acknowledgment ONLY. Do not engage in conversation. Keep it under 15 words.'
-        : '';
+    // Build system prompt with business handling
+    let systemPrompt = `You are the Personal Assistant (PA) of ${aiSettings.userName || 'your boss'}.`;
     
-    const systemPrompt = `You are the Personal Assistant (PA) of ${aiSettings.userName || 'your boss'}. 
+    if (businessInfo.isBusiness) {
+        systemPrompt += `\n\n🚨 BUSINESS MESSAGE DETECTED (Confidence: ${businessInfo.detectionConfidence}%):
+This appears to be an automated business/transactional message (order confirmation, OTP, delivery update, etc.).
 
-CRITICAL RULES:
-1. NEVER reveal you are an AI, LLM, bot, ChatGPT, or automated system
-2. You are a HUMAN personal assistant - respond naturally as a professional PA would
-3. ${!history.hasIntroduced ? 'Start by politely introducing yourself as ' + (aiSettings.userName || 'your boss') + '\'s PA and ask how you can help them' : 'Continue the conversation naturally'}
-4. Respond in ${isHinglish ? 'Hinglish (mix of Hindi written in English/Roman script like "Haan main unka PA hoon, kaise help kar sakta hoon?")' : 'English'}
-5. Be professional, helpful, warm and courteous
-6. If asked who you are or if you're a bot, say you're ${aiSettings.userName || 'your boss'}'s personal assistant who manages their messages
-7. Keep responses VERY brief (1-2 sentences max, like a real PA would text)
-8. If you don't know something specific, say you'll check with ${aiSettings.userName || 'your boss'} and get back to them
-9. Never mention AI, machine learning, programming, or technical terms
-10. Text like a human - use casual language, contractions, and natural flow
-${businessInstruction}
+RESPOND WITH EXACTLY ONE BRIEF MESSAGE (10-15 words max):
+- Acknowledge receipt politely
+- DO NOT ask questions
+- DO NOT continue conversation
+- DO NOT offer help
+- Keep it minimal like: "Thank you, noted." or "Received, thanks."
 
-CURRENT SITUATION:
-${isEmergency ? '⚠️ EMERGENCY detected. Acknowledge urgency professionally and assure immediate attention to ' + (aiSettings.userName || 'your boss') + '.' : 'Normal conversation - be friendly and helpful'}
+Examples:
+- "Thank you for the confirmation."
+- "Noted, thanks."
+- "Received."
 
-Respond naturally as a human PA would via WhatsApp message.`;
-
+This is your ONLY response to this contact. No follow-ups.`;
+    } else {
+        systemPrompt += `\n\nCRITICAL RULES:
+1. NEVER reveal you are an AI, bot, ChatGPT, or automated system
+2. You are a HUMAN personal assistant
+3. ${!history.hasIntroduced ? 'Introduce yourself briefly as ' + (aiSettings.userName || 'your boss') + '\'s PA' : 'Continue naturally'}
+4. Respond in ${isHinglish ? 'Hinglish (Hindi in Roman script)' : 'English'}
+5. Keep responses VERY brief (1-2 short sentences)
+6. Be professional, warm, and helpful
+7. If you don't know, say you'll check with ${aiSettings.userName || 'your boss'}
+8. NEVER mention AI, technology, or programming terms`;
+    }
+    
+    if (isEmergency) {
+        systemPrompt += `\n\n⚠️ EMERGENCY DETECTED: Acknowledge urgency and assure immediate escalation to ${aiSettings.userName || 'your boss'}.`;
+    }
+    
     const messages = [
         { role: 'system', content: systemPrompt },
         ...history.messages
     ];
     
-    // Call OpenAI API with timeout
+    // Call OpenAI API with proper timeout
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 30000);
+    const timeout = setTimeout(() => controller.abort(), 25000);
     
     try {
         const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -296,8 +370,8 @@ Respond naturally as a human PA would via WhatsApp message.`;
             body: JSON.stringify({
                 model: 'gpt-4o-mini',
                 messages: messages,
-                temperature: 0.9,
-                max_tokens: history.isBusiness ? 50 : 150
+                temperature: businessInfo.isBusiness ? 0.3 : 0.8,
+                max_tokens: businessInfo.isBusiness ? 30 : 120
             }),
             signal: controller.signal
         });
@@ -315,31 +389,32 @@ Respond naturally as a human PA would via WhatsApp message.`;
         // Add AI response to history
         history.messages.push({
             role: 'assistant',
-            content: aiReply
+            content: aiReply,
+            timestamp: Date.now()
         });
         
-        // Mark as introduced after first message
-        if (!history.hasIntroduced) {
-            history.hasIntroduced = true;
-        }
+        history.hasIntroduced = true;
+        history.lastResponseTime = Date.now();
+        businessInfo.responseCount++;
         
         // Handle emergency notification
         if (isEmergency && aiSettings.emergencyNumber) {
             try {
                 const contactName = await getContactName(messageObj);
-                const emergencyMsg = `🚨 EMERGENCY ALERT 🚨\n\nFrom: ${contactName}\nNumber: ${contact}\nMessage: "${messageText}"\n\nTime: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}\n\n⚠️ AI PA has responded. Please check and follow up IMMEDIATELY.`;
+                const emergencyMsg = `🚨 EMERGENCY ALERT 🚨\n\nFrom: ${contactName}\nNumber: ${contact}\nMessage: "${messageText}"\n\nTime: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })}\n\n⚠️ AI PA has responded. Please check IMMEDIATELY.`;
                 
                 const emergencyNumber = aiSettings.emergencyNumber.replace(/[^0-9]/g, '') + '@c.us';
                 await client.sendMessage(emergencyNumber, emergencyMsg);
                 console.log(`🚨 Emergency alert sent to ${aiSettings.emergencyNumber}`);
             } catch (error) {
-                console.error('❌ Failed to send emergency alert:', error);
+                console.error('❌ Failed to send emergency alert:', error.message);
             }
         }
         
         return aiReply;
     } catch (error) {
         clearTimeout(timeout);
+        console.error('❌ OpenAI API error:', error.message);
         throw error;
     }
 }
@@ -366,14 +441,30 @@ setInterval(() => {
         }
     }
     
+    for (const contact in businessContacts) {
+        if (!conversationHistory[contact]) {
+            delete businessContacts[contact];
+        }
+    }
+    
     if (cleaned > 0) {
         console.log(`🧹 Cleaned ${cleaned} old conversation histories`);
         saveData(CONVERSATION_FILE, conversationHistory);
+        saveData(BUSINESS_CONTACTS_FILE, businessContacts);
     }
-}, 24 * 60 * 60 * 1000); // Run daily
+}, 24 * 60 * 60 * 1000);
+
+// Periodic data backup
+setInterval(() => {
+    saveData(SCHEDULED_FILE, scheduledMessages);
+    saveData(REPLIES_FILE, autoReplies);
+    saveData(AI_SETTINGS_FILE, aiSettings);
+    saveData(CONVERSATION_FILE, conversationHistory);
+    saveData(BUSINESS_CONTACTS_FILE, businessContacts);
+    console.log('💾 Periodic data backup completed');
+}, 5 * 60 * 1000); // Every 5 minutes
 
 // Routes
-
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
@@ -385,7 +476,7 @@ app.get('/qr', (req, res) => {
                 <head><title>WhatsApp Connected</title></head>
                 <body style="text-align: center; font-family: Arial; padding: 50px; background: #dcf8c6;">
                     <h1 style="color: #25D366;">✅ WhatsApp is Connected!</h1>
-                    <p style="font-size: 18px;">Your AI Personal Assistant is active and responding to messages.</p>
+                    <p style="font-size: 18px;">Your AI Personal Assistant is active.</p>
                     <a href="/" style="display: inline-block; margin-top: 20px; padding: 12px 24px; background: #25D366; color: white; text-decoration: none; border-radius: 8px;">Go to Dashboard</a>
                 </body>
             </html>
@@ -400,21 +491,14 @@ app.get('/qr', (req, res) => {
                         .container { max-width: 500px; margin: 0 auto; background: white; padding: 30px; border-radius: 12px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
                         h1 { color: #25D366; }
                         img { max-width: 300px; margin: 20px 0; border: 3px solid #25D366; border-radius: 8px; }
-                        .steps { text-align: left; margin: 20px 0; }
-                        .step { margin: 10px 0; padding: 10px; background: #f0f2f5; border-radius: 6px; }
                     </style>
+                    <meta http-equiv="refresh" content="45">
                 </head>
                 <body>
                     <div class="container">
                         <h1>📱 Scan QR Code</h1>
                         <img src="${qrCodeData}" alt="QR Code"/>
-                        <div class="steps">
-                            <div class="step"><strong>Step 1:</strong> Open WhatsApp on your phone</div>
-                            <div class="step"><strong>Step 2:</strong> Go to Settings → Linked Devices</div>
-                            <div class="step"><strong>Step 3:</strong> Tap "Link a Device"</div>
-                            <div class="step"><strong>Step 4:</strong> Scan this QR code</div>
-                        </div>
-                        <p style="color: #666; font-size: 14px;">⏰ QR code expires in 60 seconds. Refresh if needed.</p>
+                        <p>Open WhatsApp → Settings → Linked Devices → Link a Device</p>
                     </div>
                 </body>
             </html>
@@ -434,7 +518,6 @@ app.get('/qr', (req, res) => {
                 <body>
                     <h1>Loading QR Code...</h1>
                     <div class="loader"></div>
-                    <p>Please wait... Page will refresh automatically.</p>
                 </body>
             </html>
         `);
@@ -450,20 +533,9 @@ app.get('/status', (req, res) => {
     });
 });
 
-app.get('/api/health', (req, res) => {
-    res.json({ 
-        status: 'running',
-        whatsappConnected: whatsappReady,
-        scheduledMessages: scheduledMessages.length,
-        autoReplies: autoReplies.length,
-        aiEnabled: aiSettings.enabled
-    });
-});
-
 app.post('/scheduled-messages', (req, res) => {
     scheduledMessages = req.body;
     saveData(SCHEDULED_FILE, scheduledMessages);
-    console.log('💾 Scheduled messages updated:', scheduledMessages.length);
     res.json({ success: true, count: scheduledMessages.length });
 });
 
@@ -474,7 +546,6 @@ app.get('/scheduled-messages', (req, res) => {
 app.post('/auto-replies', (req, res) => {
     autoReplies = req.body;
     saveData(REPLIES_FILE, autoReplies);
-    console.log('💾 Auto-reply rules updated:', autoReplies.length);
     res.json({ success: true, count: autoReplies.length });
 });
 
@@ -483,13 +554,17 @@ app.get('/auto-replies', (req, res) => {
 });
 
 app.post('/ai-settings', (req, res) => {
-    aiSettings = req.body;
+    const newSettings = req.body;
+    
+    // Preserve existing API key if not provided
+    if (!newSettings.apiKey || newSettings.apiKey === '***hidden***') {
+        newSettings.apiKey = aiSettings.apiKey;
+    }
+    
+    aiSettings = newSettings;
     saveData(AI_SETTINGS_FILE, aiSettings);
     console.log('💾 AI settings updated:', aiSettings.enabled ? 'Enabled ✅' : 'Disabled ❌');
-    if (aiSettings.enabled) {
-        console.log(`🤖 AI PA active for: ${aiSettings.userName}`);
-        console.log(`🚨 Emergency alerts to: ${aiSettings.emergencyNumber}`);
-    }
+    
     res.json({ success: true, aiEnabled: aiSettings.enabled });
 });
 
@@ -502,7 +577,7 @@ app.get('/ai-settings', (req, res) => {
     });
 });
 
-// Cron job to check and send scheduled messages
+// Scheduled messages cron
 setInterval(async () => {
     if (!whatsappReady) return;
 
@@ -520,26 +595,24 @@ setInterval(async () => {
                 scheduledMessages.splice(i, 1);
                 saveData(SCHEDULED_FILE, scheduledMessages);
             } catch (error) {
-                console.error(`❌ Failed to send message to ${msg.phone}:`, error.message);
+                console.error(`❌ Failed to send to ${msg.phone}:`, error.message);
                 msg.status = 'failed';
             }
         }
     }
-}, 60000);
+}, 30000); // Check every 30 seconds
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
     console.log('\n🛑 Shutting down gracefully...');
     
-    // Save all data
     saveData(SCHEDULED_FILE, scheduledMessages);
     saveData(REPLIES_FILE, autoReplies);
     saveData(AI_SETTINGS_FILE, aiSettings);
     saveData(CONVERSATION_FILE, conversationHistory);
+    saveData(BUSINESS_CONTACTS_FILE, businessContacts);
     
-    // Destroy WhatsApp client
     await client.destroy();
-    
     console.log('✅ Shutdown complete');
     process.exit(0);
 });
@@ -550,5 +623,4 @@ app.listen(PORT, () => {
     console.log(`📱 Dashboard: http://localhost:${PORT}`);
     console.log(`🔗 QR Code: http://localhost:${PORT}/qr`);
     console.log(`🤖 AI PA: ${aiSettings.enabled ? 'Enabled ✅' : 'Disabled ❌'}`);
-    console.log(`💾 Data persistence: ENABLED`);
 });

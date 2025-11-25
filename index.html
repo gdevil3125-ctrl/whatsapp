@@ -24,6 +24,7 @@
         let autoReplies = [];
         let aiSettings = {enabled: false, apiKey: '', emergencyNumber: '', userName: ''};
         let connectionStatus = 'disconnected';
+        let isUserTyping = false; // NEW: Track if user is typing
 
         async function checkConnection() {
             try {
@@ -44,6 +45,9 @@
         }
 
         async function loadData() {
+            // NEW: Don't reload if user is typing
+            if (isUserTyping) return;
+            
             try {
                 const [msgsRes, repliesRes, aiRes] = await Promise.all([
                     fetch(`${API_URL}/scheduled-messages`),
@@ -104,6 +108,15 @@
             }
         }
 
+        // NEW: Mark typing state when user interacts with inputs
+        function markTypingStart() {
+            isUserTyping = true;
+        }
+
+        function markTypingEnd() {
+            setTimeout(() => { isUserTyping = false; }, 500);
+        }
+
         function addScheduledMessage() {
             const phone = document.getElementById('msg-phone').value;
             const message = document.getElementById('msg-text').value;
@@ -112,9 +125,7 @@
             if (phone && message && datetime) {
                 scheduledMessages.push({ phone, message, datetime, id: Date.now(), status: 'pending' });
                 syncWithBackend();
-                document.getElementById('msg-phone').value = '';
-                document.getElementById('msg-text').value = '';
-                document.getElementById('msg-datetime').value = '';
+                isUserTyping = false; // NEW: Allow re-render after adding
                 renderScheduleTab();
             }
         }
@@ -132,8 +143,7 @@
             if (trigger && response) {
                 autoReplies.push({ trigger, response, id: Date.now() });
                 syncWithBackend();
-                document.getElementById('reply-trigger').value = '';
-                document.getElementById('reply-response').value = '';
+                isUserTyping = false; // NEW: Allow re-render after adding
                 renderAutoReplyTab();
             }
         }
@@ -151,9 +161,9 @@
                     <div class="bg-gradient-to-br from-green-50 to-teal-50 p-6 rounded-xl border-2 border-green-200">
                         <h3 class="text-lg font-bold text-gray-800 mb-4">➕ Schedule New Message</h3>
                         <div class="space-y-4">
-                            <input type="tel" id="msg-phone" placeholder="Phone Number (e.g., +919876543210)" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none">
-                            <textarea id="msg-text" placeholder="Your message..." class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none h-24"></textarea>
-                            <input type="datetime-local" id="msg-datetime" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none">
+                            <input type="tel" id="msg-phone" placeholder="Phone Number (e.g., +919876543210)" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none" onfocus="window.markTypingStart()" onblur="window.markTypingEnd()">
+                            <textarea id="msg-text" placeholder="Your message..." class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none h-24" onfocus="window.markTypingStart()" onblur="window.markTypingEnd()"></textarea>
+                            <input type="datetime-local" id="msg-datetime" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none" onfocus="window.markTypingStart()" onblur="window.markTypingEnd()">
                             <button onclick="window.addScheduledMessage()" class="w-full bg-gradient-to-r from-green-600 to-teal-600 text-white py-3 rounded-lg font-semibold hover:from-green-700 hover:to-teal-700 transition-all">
                                 Add to Schedule
                             </button>
@@ -186,8 +196,8 @@
                     <div class="bg-gradient-to-br from-blue-50 to-teal-50 p-6 rounded-xl border-2 border-blue-200">
                         <h3 class="text-lg font-bold text-gray-800 mb-4">➕ Add Auto Reply Rule</h3>
                         <div class="space-y-4">
-                            <input type="text" id="reply-trigger" placeholder="Trigger message (e.g., 'price list')" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none">
-                            <textarea id="reply-response" placeholder="Auto reply message" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none h-24"></textarea>
+                            <input type="text" id="reply-trigger" placeholder="Trigger message (e.g., 'price list')" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none" onfocus="window.markTypingStart()" onblur="window.markTypingEnd()">
+                            <textarea id="reply-response" placeholder="Auto reply message" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none h-24" onfocus="window.markTypingStart()" onblur="window.markTypingEnd()"></textarea>
                             <button onclick="window.addAutoReply()" class="w-full bg-gradient-to-r from-blue-600 to-teal-600 text-white py-3 rounded-lg font-semibold hover:from-blue-700 hover:to-teal-700 transition-all">
                                 Add Reply Rule
                             </button>
@@ -226,19 +236,19 @@
                         <div class="space-y-4">
                             <div>
                                 <label class="block text-sm font-semibold text-gray-700 mb-2">Your Name</label>
-                                <input type="text" id="ai-username" value="${aiSettings.userName || ''}" placeholder="e.g., Rahul Kumar" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none">
+                                <input type="text" id="ai-username" value="${aiSettings.userName || ''}" placeholder="e.g., Rahul Kumar" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none" onfocus="window.markTypingStart()" onblur="window.markTypingEnd()">
                                 <p class="text-xs text-gray-500 mt-1">AI will introduce itself as YOUR Personal Assistant</p>
                             </div>
                             
                             <div>
                                 <label class="block text-sm font-semibold text-gray-700 mb-2">OpenAI API Key</label>
-                                <input type="password" id="ai-apikey" value="${apiKeyDisplay}" placeholder="sk-proj-..." class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none">
+                                <input type="password" id="ai-apikey" value="${apiKeyDisplay}" placeholder="sk-proj-..." class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none" onfocus="window.markTypingStart()" onblur="window.markTypingEnd()">
                                 <p class="text-xs text-gray-500 mt-1">Get your API key from <a href="https://platform.openai.com/api-keys" target="_blank" class="text-blue-600 underline">OpenAI Platform</a></p>
                             </div>
                             
                             <div>
                                 <label class="block text-sm font-semibold text-gray-700 mb-2">Emergency Alert Number</label>
-                                <input type="tel" id="ai-emergency" value="${aiSettings.emergencyNumber || ''}" placeholder="+919876543210" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none">
+                                <input type="tel" id="ai-emergency" value="${aiSettings.emergencyNumber || ''}" placeholder="+919876543210" class="w-full p-3 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none" onfocus="window.markTypingStart()" onblur="window.markTypingEnd()">
                                 <p class="text-xs text-gray-500 mt-1">You'll receive instant alerts here for emergency messages</p>
                             </div>
                             
@@ -384,6 +394,8 @@
         window.deleteScheduledMessage = deleteScheduledMessage;
         window.addAutoReply = addAutoReply;
         window.deleteAutoReply = deleteAutoReply;
+        window.markTypingStart = markTypingStart; // NEW: Export to window
+        window.markTypingEnd = markTypingEnd; // NEW: Export to window
         window.saveAISettings = async function() {
             const apiKey = document.getElementById('ai-apikey').value;
             
@@ -396,6 +408,7 @@
             
             await syncWithBackend();
             alert('✅ AI Settings saved! Your PA is now ' + (aiSettings.enabled ? 'ACTIVE 🤖' : 'inactive'));
+            isUserTyping = false; // NEW: Allow re-render after saving
             renderSetupTab();
         };
 
